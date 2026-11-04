@@ -1,4 +1,4 @@
-FROM eclipse-temurin:21-jdk-alpine-3.24 AS build
+FROM eclipse-temurin:24-jdk-alpine-3.22 AS build
 WORKDIR /workspace
 COPY gradlew settings.gradle build.gradle ./
 COPY gradle ./gradle
@@ -7,7 +7,7 @@ RUN chmod +x gradlew && ./gradlew --no-daemon dependencies
 COPY src ./src
 RUN ./gradlew --no-daemon bootJar
 
-FROM eclipse-temurin:21-jre-alpine-3.24
+FROM eclipse-temurin:24-jre-alpine-3.22
 WORKDIR /app
 RUN addgroup -S zepto && adduser -S zepto -G zepto
 COPY --from=build /workspace/build/libs/zepto-clone-0.0.1-SNAPSHOT.jar /app/app.jar
