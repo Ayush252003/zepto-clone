@@ -1,0 +1,91 @@
+name: Deploy environment
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: GitHub environment to deploy
+        required: true
+        type: choice
+        options: [staging, production]
+      image_tag:
+        description: Immutable image tag (sha-<40 hex characters> or vX.Y.Z)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy and smoke test
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.target }}
+    steps:
+      - name: Validate deployment input and configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          [[ "$DEPLOY_USER" =~ ^[A-Za-z0-9._-]+$ ]]
+          [[ "$DEPLOY_PATH" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "$IMAGE_TAG" =~ ^sha-[0-9a-f]{40}$|^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/deploy_key" "$HOME/.ssh/known_hosts"
+          echo "DEPLOY_HOST=$DEPLOY_HOST" >> "$GITHUB_ENV"
+          echo "DEPLOY_USER=$DEPLOY_USER" >> "$GITHUB_ENV"
+          echo "DEPLOY_PATH=$DEPLOY_PATH" >> "$GITHUB_ENV"
+          echo "APP_IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}:$IMAGE_TAG" >> "$GITHUB_ENV"
+      - name: Deploy, health check, and roll back if needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i "$HOME/.ssh/deploy_key" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" "bash -s -- $DEPLOY_PATH $APP_IMAGE" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+          cd "$1"
+          new_image="$2"
+          old_id="$(docker compose ps -q app || true)"
+          old_image=""
+          if [ -n "$old_id" ]; then old_image="$(docker inspect --format '{{.Config.Image}}' "$old_id")"; fi
+          rollback() {
+            if [ -n "$old_image" ]; then
+              APP_IMAGE="$old_image" docker compose up -d --no-deps app || echo 'Rollback command failed.' >&2
+            else
+              APP_IMAGE="$new_image" docker compose stop app || true
+            fi
+          }
+          if ! APP_IMAGE="$new_image" docker compose pull app; then
+            echo 'Image pull failed; the existing service was left running.' >&2
+            exit 1
+          fi
+          if ! APP_IMAGE="$new_image" docker compose up -d --no-deps app; then
+            rollback
+            exit 1
+          fi
+          healthy=false
+          for _ in $(seq 1 45); do
+            id="$(docker compose ps -q app || true)"
+            state=""
+            if [ -n "$id" ]; then state="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' "$id")"; fi
+            if [ "$state" = healthy ]; then healthy=true; break; fi
+            sleep 2
+          done
+          if [ "$healthy" != true ] || ! APP_IMAGE="$new_image" docker compose exec -T app wget -qO- http://127.0.0.1:8081/actuator/health | grep -q '"status":"UP"'; then
+            rollback
+            echo 'Health smoke check failed; rollback was attempted.' >&2
+            exit 1
+          fi
+          echo 'Deployment passed the health smoke check.'
+          REMOTE_SCRIPT

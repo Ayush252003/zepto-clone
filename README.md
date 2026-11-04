@@ -179,4 +179,3 @@ If startup says MySQL denied user `'${DB_USERNAME}'`, the run configuration is p
 Monolithic backend through CI/CD: catalog, auth, inventory, carts, orders, simulated payments, delivery, in-app notifications, optional Redis caching, Prometheus metrics, Compose, GitHub Actions CI/GHCR publishing, and manual staging/production CD gated by environment protection. Microservices and managed cloud infrastructure remain later stages.
 
 See [docs/architecture.md](docs/architecture.md) for the runtime diagram and [PROJECT_PROGRESS.md](PROJECT_PROGRESS.md) for implementation and verification status.
-

@@ -1,0 +1,141 @@
+name: CI and container publishing
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build, tests, and container scan
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4.13
+        env:
+          MYSQL_DATABASE: zepto_clone_test
+          MYSQL_ROOT_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD}"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+      redis:
+        image: redis:7.4.12-alpine3.21
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s --health-timeout=3s --health-retries=20
+    env:
+      DB_USERNAME: root
+      DB_PASSWORD: ci-${{ github.run_id }}-${{ github.run_attempt }}
+      INVENTORY_MYSQL_TESTS: "true"
+      REDIS_CACHE_TESTS: "true"
+      CACHE_TYPE: redis
+      REDIS_HOST: localhost
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Java 21
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - name: Create an ephemeral JWT signing key
+        run: echo "JWT_SECRET_BASE64=$(openssl rand -base64 32 | tr -d '\n')" >> "$GITHUB_ENV"
+      - name: Build and run unit plus MySQL/Redis integration tests
+        run: ./gradlew --no-daemon clean test bootJar
+      - name: Validate Docker Compose configuration
+        run: docker compose --env-file .env.example config --quiet
+      - name: Upload test reports and executable jar
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test-reports-and-jar
+          path: |
+            build/reports/tests/test/
+            build/test-results/test/
+            build/libs/zepto-clone-0.0.1-SNAPSHOT.jar
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Build container image
+        run: docker build --tag zepto-clone:ci .
+      - name: Scan container for high and critical vulnerabilities
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
+        with:
+          image-ref: zepto-clone:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+
+  dependency-review:
+    name: Review dependency changes
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Reject newly introduced vulnerable dependencies
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+          fail-on-scopes: runtime,development
+
+  publish:
+    name: Publish versioned image to GHCR
+    # Keep ordinary CI pushes focused on verification. Publishing is release-tag only.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare image name
+        id: image
+        shell: bash
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Authenticate to GitHub Container Registry
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and publish immutable commit tag
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          docker build --tag "$IMAGE:sha-$GITHUB_SHA" .
+          docker push "$IMAGE:sha-$GITHUB_SHA"
+      - name: Publish latest tag for the default branches
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          docker tag "$IMAGE:sha-$GITHUB_SHA" "$IMAGE:latest"
+          docker push "$IMAGE:latest"
+      - name: Publish release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          docker tag "$IMAGE:sha-$GITHUB_SHA" "$IMAGE:${GITHUB_REF_NAME}"
+          docker push "$IMAGE:${GITHUB_REF_NAME}"

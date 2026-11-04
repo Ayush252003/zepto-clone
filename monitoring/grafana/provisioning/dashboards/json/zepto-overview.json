@@ -1,0 +1,19 @@
+{
+  "annotations": {"list": []},
+  "editable": false,
+  "graphTooltip": 1,
+  "panels": [
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "id": 1, "targets": [{"expr": "sum(rate(http_server_requests_seconds_count{application=\"zepto-clone\",uri!~\"/actuator.*\"}[5m])) by (uri,method)", "legendFormat": "{{method}} {{uri}}", "refId": "A"}], "title": "HTTP request rate", "type": "timeseries"},
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "id": 2, "targets": [{"expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{application=\"zepto-clone\",uri!~\"/actuator.*\"}[5m])) by (le,uri))", "legendFormat": "p95 {{uri}}", "refId": "A"}], "title": "HTTP p95 latency", "type": "timeseries"},
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}, "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "id": 3, "targets": [{"expr": "sum(jvm_memory_used_bytes{application=\"zepto-clone\",area=\"heap\"})", "legendFormat": "Heap used", "refId": "A"}, {"expr": "sum(jvm_memory_max_bytes{application=\"zepto-clone\",area=\"heap\"})", "legendFormat": "Heap max", "refId": "B"}], "title": "JVM heap", "type": "timeseries"},
+    {"datasource": {"type": "prometheus", "uid": "prometheus"}, "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []}, "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "id": 4, "targets": [{"expr": "system_cpu_usage{application=\"zepto-clone\"}", "legendFormat": "Process CPU", "refId": "A"}, {"expr": "process_cpu_usage{application=\"zepto-clone\"}", "legendFormat": "JVM process CPU", "refId": "B"}], "title": "CPU utilization", "type": "timeseries"}
+  ],
+  "refresh": "30s",
+  "schemaVersion": 41,
+  "tags": ["zepto", "spring-boot"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "Zepto application overview",
+  "uid": "zepto-overview",
+  "version": 1
+}
