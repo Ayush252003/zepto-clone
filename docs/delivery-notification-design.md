@@ -1,7 +1,9 @@
-# Delivery tracking and notifications
+# Delivery and notifications
 
-Delivery is created only after simulated payment succeeds. The single-store MVP starts at `PREPARING`; an ADMIN then advances exactly one step at a time through `ASSIGNED`, `PACKED`, `OUT_FOR_DELIVERY`, and `DELIVERED`. Assignment can include a courier display name and an updated ETA. The ETA is simulated and is not a courier or map integration.
+A delivery is created after simulated payment succeeds. It starts in `PREPARING`; an administrator advances it through `ASSIGNED`, `PACKED`, `OUT_FOR_DELIVERY`, and `DELIVERED`, one step at a time. Assignment can record a courier display name and a simulated ETA. There is no courier dispatch or location tracking.
 
-Customer delivery reads and in-app notifications are scoped to the authenticated customer. Each order, payment, or delivery transition writes its notification in the same MySQL transaction as the state change. That keeps the customer-visible timeline consistent if a database operation fails. It is synchronous because this is an in-process modular monolith; when notifications must leave the process, a transactional outbox and a message broker can be designed around measured reliability needs.
+Customers can read delivery progress for their own orders and list or mark their own in-app notifications as read. Admins update delivery status. The API checks ownership from the authenticated customer, not a caller-supplied user ID.
 
-Flyway V6 creates deliveries and notifications. The API supports customer delivery lookup, customer notification list/read, and ADMIN delivery status updates. No email/SMS provider or Kafka dependency is used.
+Order, payment, and delivery notifications are stored in MySQL in the same transaction as the state change that produced them. This keeps the in-app record consistent with the order lifecycle. `V6` creates the delivery and notification tables; no email/SMS provider or message broker is used.
+
+If notifications later need to leave the process, move delivery to an outbox-backed flow so database updates and message publication can recover from failures independently.
